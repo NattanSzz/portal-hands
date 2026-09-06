@@ -1,0 +1,4 @@
+Coloque o arquivo "hand_landmarker.task" nesta pasta (app/src/main/assets/).
+Veja o README.md na raiz do projeto para o link de download.
+
+Depois de baixar o modelo, pode apagar este arquivo de texto.
