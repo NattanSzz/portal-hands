@@ -134,7 +134,7 @@ private fun startBackgroundMusic() {
 
     backgroundMusic = MediaPlayer.create(
         this,
-        R.raw.background_music
+        R.raw.sunflower
     ).apply {
         isLooping = true
         setVolume(0.5f, 0.5f)
