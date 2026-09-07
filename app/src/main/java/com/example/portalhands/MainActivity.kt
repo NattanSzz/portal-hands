@@ -24,194 +24,576 @@ import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.util.concurrent.Executors
 
 /**
- * Versão Android do main.py da versão desktop.
- *
- * O pipeline é o mesmo: captura um frame da câmera, espelha, detecta as duas mãos,
- * calcula o polígono do "portal" entre os dedos indicador e polegar de cada mão,
- * pinta o filtro atual dentro do polígono e mostra o resultado em tela cheia.
- * Aproximar/fechar os dedos de cada mão (gesto de "fechar o portal") avança para
- * o próximo filtro, exatamente como no ClosingGestureDetector do desktop.
- */
-class MainActivity : AppCompatActivity() {
 
-    private lateinit var imageView: ImageView
-    private lateinit var handLandmarker: HandLandmarker
-    private val cameraExecutor = Executors.newSingleThreadExecutor()
+* Versão Android do main.py da versão desktop.
+*
+* Pipeline:
+* 1. Captura frame da câmera.
+* 2. Converte para Bitmap.
+* 3. Corrige rotação e espelha a imagem.
+* 4. Detecta as duas mãos usando MediaPipe em modo VIDEO.
+* 5. Extrai os dedos indicador/polegar.
+* 6. Suaviza os quatro pontos com PortalTracker.
+* 7. Mantém o último portal por alguns frames quando a detecção falha.
+* 8. Calcula o gesto de fechamento usando os pontos suavizados.
+* 9. Renderiza o filtro dentro do portal.
+     */
+     class MainActivity : AppCompatActivity() {
 
-    private var filtroIndex = 0
-    private val closingDetector = ClosingGestureDetector()
+  private lateinit var imageView: ImageView
+  private lateinit var handLandmarker: HandLandmarker
 
-    private val requestPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) {
-                startCamera()
-            } else {
-                Toast.makeText(this, "É necessário conceder acesso à câmera.", Toast.LENGTH_LONG).show()
-            }
-        }
+  private val cameraExecutor = Executors.newSingleThreadExecutor()
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        imageView = findViewById(R.id.preview_image)
+  private var filtroIndex = 0
 
-        setupHandLandmarker()
+  private val closingDetector = ClosingGestureDetector()
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            == PackageManager.PERMISSION_GRANTED
-        ) {
-            startCamera()
-        } else {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
-    }
+  /**
 
+  * Suaviza os pontos do portal e mantém a última posição válida
+  * durante pequenas falhas de detecção.
+    */
+    private val portalTracker = PortalTracker(maxMissedFrames = 8)
+
+  /**
+
+  * Timestamp usado pelo MediaPipe no modo VIDEO.
+  *
+  * Precisa ser monotonicamente crescente.
+    */
+    private var lastTimestampMs = 0L
+
+  private val requestPermissionLauncher =
+  registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+  if (granted) {
+  startCamera()
+  } else {
+  Toast.makeText(
+  this,
+  "É necessário conceder acesso à câmera.",
+  Toast.LENGTH_LONG
+  ).show()
+  }
+  }
+
+  override fun onCreate(savedInstanceState: Bundle?) {
+  super.onCreate(savedInstanceState)
+
+  ```
+   setContentView(R.layout.activity_main)
+
+   imageView = findViewById(R.id.preview_image)
+
+   setupHandLandmarker()
+
+   if (
+       ContextCompat.checkSelfPermission(
+           this,
+           Manifest.permission.CAMERA
+       ) == PackageManager.PERMISSION_GRANTED
+   ) {
+       startCamera()
+   } else {
+       requestPermissionLauncher.launch(Manifest.permission.CAMERA)
+   }
+  ```
+
+  }
+
+  /**
+
+  * Configura o MediaPipe Hand Landmarker.
+  *
+  * A principal mudança em relação à versão anterior é:
+  *
+  * RunningMode.IMAGE
+  * ```
+       ↓
+    ```
+  * RunningMode.VIDEO
+  *
+  * Isso permite que o MediaPipe utilize o rastreamento temporal
+  * entre os frames, reduzindo custo e instabilidade.
+    */
     private fun setupHandLandmarker() {
-        // O modelo hand_landmarker.task precisa estar em app/src/main/assets/ (veja o README).
-        val baseOptions = BaseOptions.builder()
-            .setModelAssetPath("hand_landmarker.task")
-            .build()
 
-        val options = HandLandmarker.HandLandmarkerOptions.builder()
-            .setBaseOptions(baseOptions)
-            .setNumHands(2)
-            .setMinHandDetectionConfidence(0.6f)
-            .setMinTrackingConfidence(0.6f)
-            .setMinHandPresenceConfidence(0.6f)
-            .setRunningMode(RunningMode.IMAGE)
-            .build()
+    val baseOptions = BaseOptions.builder()
+    .setModelAssetPath("hand_landmarker.task")
+    .build()
 
-        handLandmarker = HandLandmarker.createFromOptions(this, options)
+    val options = HandLandmarker.HandLandmarkerOptions.builder()
+    .setBaseOptions(baseOptions)
+    .setNumHands(2)
+    .setMinHandDetectionConfidence(0.6f)
+    .setMinTrackingConfidence(0.6f)
+    .setMinHandPresenceConfidence(0.6f)
+    .setRunningMode(RunningMode.VIDEO)
+    .build()
+
+    handLandmarker = HandLandmarker.createFromOptions(
+    this,
+    options
+    )
     }
 
+  /**
+
+  * Inicializa a câmera.
+    */
     private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
 
-            @Suppress("DEPRECATION")
-            val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480))
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
+    val cameraProviderFuture =
+    ProcessCameraProvider.getInstance(this)
 
-            analysis.setAnalyzer(cameraExecutor) { imageProxy -> analyze(imageProxy) }
+    cameraProviderFuture.addListener({
 
-            // Câmera frontal, igual à experiência de "espelho" da versão desktop
-            // (cv2.flip(frame, 1)). Troque para CameraSelector.DEFAULT_BACK_CAMERA
-            // se preferir a câmera traseira.
-            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+    ```
+     val cameraProvider = cameraProviderFuture.get()
 
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, cameraSelector, analysis)
-            } catch (e: Exception) {
-                Log.e(TAG, "Falha ao iniciar a câmera", e)
-            }
-        }, ContextCompat.getMainExecutor(this))
+     @Suppress("DEPRECATION")
+     val analysis = ImageAnalysis.Builder()
+         .setTargetResolution(Size(640, 480))
+         .setOutputImageFormat(
+             ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888
+         )
+         .setBackpressureStrategy(
+             ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+         )
+         .build()
+
+     analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+         analyze(imageProxy)
+     }
+
+     /**
+      * Câmera frontal para comportamento de espelho.
+      */
+     val cameraSelector =
+         CameraSelector.DEFAULT_FRONT_CAMERA
+
+     try {
+
+         cameraProvider.unbindAll()
+
+         cameraProvider.bindToLifecycle(
+             this,
+             cameraSelector,
+             analysis
+         )
+
+     } catch (e: Exception) {
+
+         Log.e(
+             TAG,
+             "Falha ao iniciar a câmera",
+             e
+         )
+     }
+    ```
+
+    }, ContextCompat.getMainExecutor(this))
     }
 
+  /**
+
+  * Processa um frame da câmera.
+    */
     private fun analyze(imageProxy: ImageProxy) {
-        try {
-            val rawBitmap = imageProxyToBitmap(imageProxy)
-            val rotation = imageProxy.imageInfo.rotationDegrees
-            val bitmap = rotateAndMirror(rawBitmap, rotation, mirror = true)
 
-            val w = bitmap.width
-            val h = bitmap.height
+    try {
 
-            val mpImage = BitmapImageBuilder(bitmap).build()
-            val result = handLandmarker.detect(mpImage)
+    ```
+     val rawBitmap = imageProxyToBitmap(imageProxy)
 
-            val landmarksList = result.landmarks()
-            val handednessList = result.handednesses()
+     val rotation =
+         imageProxy.imageInfo.rotationDegrees
 
-            var leftHand: List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>? = null
-            var rightHand: List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>? = null
+     /**
+      * Corrige orientação e espelha a câmera frontal.
+      */
+     val bitmap = rotateAndMirror(
+         rawBitmap,
+         rotation,
+         mirror = true
+     )
 
-            for (idx in landmarksList.indices) {
-                val rawLabel = handednessList[idx][0].categoryName()
-                // Mesma inversão Left/Right do main.py: a imagem já está espelhada,
-                // então o rótulo bruto do MediaPipe precisa ser invertido.
-                val label = if (rawLabel == "Left") "Right" else "Left"
-                if (label == "Left") leftHand = landmarksList[idx] else rightHand = landmarksList[idx]
-            }
+     /**
+      * O Bitmap original não é mais necessário depois
+      * da transformação.
+      */
+     if (bitmap !== rawBitmap) {
+         rawBitmap.recycle()
+     }
 
-            if (leftHand != null && rightHand != null) {
-                val p1 = PointF(
-                    leftHand[HandLandmarks.INDEX_TIP].x() * w,
-                    leftHand[HandLandmarks.INDEX_TIP].y() * h
-                )
-                val p2 = PointF(
-                    leftHand[HandLandmarks.THUMB_TIP].x() * w,
-                    leftHand[HandLandmarks.THUMB_TIP].y() * h
-                )
-                val p3 = PointF(
-                    rightHand[HandLandmarks.INDEX_TIP].x() * w,
-                    rightHand[HandLandmarks.INDEX_TIP].y() * h
-                )
-                val p4 = PointF(
-                    rightHand[HandLandmarks.THUMB_TIP].x() * w,
-                    rightHand[HandLandmarks.THUMB_TIP].y() * h
-                )
+     val width = bitmap.width
+     val height = bitmap.height
 
-                val width = portalWidth(p1, p2, p3, p4)
-                if (closingDetector.update(width, w)) {
-                    filtroIndex = (filtroIndex + 1) % FILTERS.size
-                }
+     val mpImage =
+         BitmapImageBuilder(bitmap).build()
 
-                renderPortal(bitmap, p1, p2, p3, p4, FILTERS[filtroIndex])
-            }
+     /**
+      * Garante timestamp crescente.
+      *
+      * O ImageProxy não fornece necessariamente um timestamp
+      * adequado para o requisito do modo VIDEO, portanto usamos
+      * o timestamp do sistema.
+      */
+     val timestampMs = System.nanoTime() / 1_000_000L
 
-            runOnUiThread { imageView.setImageBitmap(bitmap) }
-        } catch (e: Exception) {
-            Log.e(TAG, "Erro ao processar frame", e)
-        } finally {
-            imageProxy.close()
-        }
+     val safeTimestamp =
+         if (timestampMs <= lastTimestampMs) {
+             lastTimestampMs + 1L
+         } else {
+             timestampMs
+         }
+
+     lastTimestampMs = safeTimestamp
+
+     /**
+      * IMPORTANTE:
+      *
+      * Em RunningMode.VIDEO não usamos detect().
+      *
+      * Usamos detectForVideo() para permitir que o MediaPipe
+      * aproveite o rastreamento entre frames.
+      */
+     val result =
+         handLandmarker.detectForVideo(
+             mpImage,
+             safeTimestamp
+         )
+
+     val landmarksList =
+         result.landmarks()
+
+     val handednessList =
+         result.handednesses()
+
+     var leftHand:
+         List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>? =
+         null
+
+     var rightHand:
+         List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>? =
+         null
+
+     /**
+      * Identifica as duas mãos.
+      *
+      * Como a imagem já foi espelhada, invertemos Left/Right
+      * fornecido pelo MediaPipe para manter a mesma lógica
+      * utilizada anteriormente.
+      */
+     for (idx in landmarksList.indices) {
+
+         if (handednessList[idx].isEmpty()) {
+             continue
+         }
+
+         val rawLabel =
+             handednessList[idx][0].categoryName()
+
+         val label =
+             if (rawLabel == "Left") {
+                 "Right"
+             } else {
+                 "Left"
+             }
+
+         if (label == "Left") {
+             leftHand = landmarksList[idx]
+         } else {
+             rightHand = landmarksList[idx]
+         }
+     }
+
+     /**
+      * Obtém os pontos crus.
+      *
+      * Se uma das mãos não foi encontrada, rawPortal será null.
+      *
+      * O PortalTracker cuidará da persistência e poderá manter
+      * o último portal durante alguns frames.
+      */
+     val rawPortal =
+         if (leftHand != null && rightHand != null) {
+
+             val p1 = PointF(
+                 leftHand[
+                     HandLandmarks.INDEX_TIP
+                 ].x() * width,
+                 leftHand[
+                     HandLandmarks.INDEX_TIP
+                 ].y() * height
+             )
+
+             val p2 = PointF(
+                 leftHand[
+                     HandLandmarks.THUMB_TIP
+                 ].x() * width,
+                 leftHand[
+                     HandLandmarks.THUMB_TIP
+                 ].y() * height
+             )
+
+             val p3 = PointF(
+                 rightHand[
+                     HandLandmarks.INDEX_TIP
+                 ].x() * width,
+                 rightHand[
+                     HandLandmarks.INDEX_TIP
+                 ].y() * height
+             )
+
+             val p4 = PointF(
+                 rightHand[
+                     HandLandmarks.THUMB_TIP
+                 ].x() * width,
+                 rightHand[
+                     HandLandmarks.THUMB_TIP
+                 ].y() * height
+             )
+
+             PortalPoints(
+                 p1 = p1,
+                 p2 = p2,
+                 p3 = p3,
+                 p4 = p4
+             )
+
+         } else {
+             null
+         }
+
+     /**
+      * Suaviza os pontos e mantém o portal durante pequenas
+      * falhas de detecção.
+      */
+     val portal =
+         portalTracker.update(
+             rawPortal,
+             safeTimestamp
+         )
+
+     if (portal != null) {
+
+         /**
+          * Os pontos abaixo já são suavizados.
+          */
+         val p1 = portal.p1
+         val p2 = portal.p2
+         val p3 = portal.p3
+         val p4 = portal.p4
+
+         /**
+          * Calcula a largura do portal usando pontos suavizados.
+          *
+          * Isso também estabiliza o ClosingGestureDetector.
+          */
+         val widthValue =
+             portalWidth(
+                 p1,
+                 p2,
+                 p3,
+                 p4
+             )
+
+         /**
+          * O gesto agora recebe uma distância muito menos
+          * ruidosa, evitando oscilações próximas ao threshold.
+          */
+         if (
+             closingDetector.update(
+                 widthValue,
+                 width
+             )
+         ) {
+
+             filtroIndex =
+                 (filtroIndex + 1) % FILTERS.size
+         }
+
+         /**
+          * Renderiza o filtro usando os pontos suavizados.
+          */
+         renderPortal(
+             bitmap,
+             p1,
+             p2,
+             p3,
+             p4,
+             FILTERS[filtroIndex]
+         )
+     }
+
+     /**
+      * Atualiza a UI somente na thread principal.
+      */
+     runOnUiThread {
+
+         imageView.setImageBitmap(bitmap)
+     }
+    ```
+
+    } catch (e: Exception) {
+
+    ```
+     Log.e(
+         TAG,
+         "Erro ao processar frame",
+         e
+     )
+    ```
+
+    } finally {
+
+    ```
+     imageProxy.close()
+    ```
+
+    }
     }
 
-    /** Converte um ImageProxy no formato RGBA_8888 (configurado no ImageAnalysis) em Bitmap. */
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
-        val plane = image.planes[0]
-        val buffer = plane.buffer
-        buffer.rewind()
-        val pixelStride = plane.pixelStride
-        val rowStride = plane.rowStride
-        val rowPadding = rowStride - pixelStride * image.width
+  /**
 
-        val bitmap = Bitmap.createBitmap(
-            image.width + rowPadding / pixelStride,
-            image.height,
-            Bitmap.Config.ARGB_8888
-        )
-        bitmap.copyPixelsFromBuffer(buffer)
+  * Converte ImageProxy RGBA_8888 para Bitmap.
+  *
+  * Evita o .copy() adicional quando o buffer já possui exatamente
+  * o tamanho necessário.
+    */
+    private fun imageProxyToBitmap(
+    image: ImageProxy
+    ): Bitmap {
 
-        return if (rowPadding == 0) {
-            bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        } else {
-            Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height).copy(Bitmap.Config.ARGB_8888, true)
-        }
+    val plane = image.planes[0]
+
+    val buffer = plane.buffer
+
+    buffer.rewind()
+
+    val pixelStride =
+    plane.pixelStride
+
+    val rowStride =
+    plane.rowStride
+
+    val rowPadding =
+    rowStride -
+    pixelStride * image.width
+
+    /**
+
+    * Normalmente, com RGBA_8888, o pixelStride é 4.
+      */
+      val bitmapWidth =
+      image.width +
+      rowPadding / pixelStride
+
+    val bitmap =
+    Bitmap.createBitmap(
+    bitmapWidth,
+    image.height,
+    Bitmap.Config.ARGB_8888
+    )
+
+    bitmap.copyPixelsFromBuffer(buffer)
+
+    /**
+
+    * Se não existe padding, podemos retornar diretamente.
+    *
+    * Caso exista padding, precisamos recortar a área útil.
+      */
+      return if (rowPadding == 0) {
+
+      bitmap
+
+    } else {
+
+    ```
+     val cropped =
+         Bitmap.createBitmap(
+             bitmap,
+             0,
+             0,
+             image.width,
+             image.height
+         )
+
+     bitmap.recycle()
+
+     cropped
+    ```
+
+    }
     }
 
-    /** Rotaciona conforme a orientação do sensor e espelha horizontalmente (equivalente a cv2.flip(frame, 1)). */
-    private fun rotateAndMirror(bitmap: Bitmap, rotationDegrees: Int, mirror: Boolean): Bitmap {
-        val matrix = Matrix()
-        matrix.postRotate(rotationDegrees.toFloat())
-        if (mirror) {
-            matrix.postScale(-1f, 1f)
-        }
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+  /**
+
+  * Rotaciona a imagem conforme a orientação da câmera
+  * e espelha horizontalmente.
+    */
+    private fun rotateAndMirror(
+    bitmap: Bitmap,
+    rotationDegrees: Int,
+    mirror: Boolean
+    ): Bitmap {
+
+    /**
+
+    * Não precisamos criar uma matriz quando não há transformação.
+      */
+      if (rotationDegrees == 0 && !mirror) {
+      return bitmap
+      }
+
+    val matrix = Matrix()
+
+    if (rotationDegrees != 0) {
+    matrix.postRotate(
+    rotationDegrees.toFloat()
+    )
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        cameraExecutor.shutdown()
-        handLandmarker.close()
+    if (mirror) {
+    matrix.postScale(
+    -1f,
+    1f
+    )
     }
 
-    companion object {
-        private const val TAG = "PortalHands"
+    return Bitmap.createBitmap(
+    bitmap,
+    0,
+    0,
+    bitmap.width,
+    bitmap.height,
+    matrix,
+    true
+    )
     }
-}
+
+  override fun onDestroy() {
+
+  ```
+   super.onDestroy()
+
+   cameraExecutor.shutdown()
+
+   if (::handLandmarker.isInitialized) {
+       handLandmarker.close()
+   }
+  ```
+
+  }
+
+  companion object {
+
+  ```
+   private const val TAG =
+       "PortalHands"
+  ```
+
+  }
+  }
