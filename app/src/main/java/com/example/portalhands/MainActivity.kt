@@ -13,7 +13,6 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ExperimentalImageAnalysisOutputImageFormat
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -85,7 +84,6 @@ class MainActivity : AppCompatActivity() {
         handLandmarker = HandLandmarker.createFromOptions(this, options)
     }
 
-    @OptIn(ExperimentalImageAnalysisOutputImageFormat::class)
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
