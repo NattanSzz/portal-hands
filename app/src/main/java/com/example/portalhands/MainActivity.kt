@@ -22,6 +22,7 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.util.concurrent.Executors
+import android.media.MediaPlayer
 
 /**
 
@@ -60,6 +61,8 @@ class MainActivity : AppCompatActivity() {
 
 private lateinit var imageView: ImageView
 private lateinit var handLandmarker: HandLandmarker
+
+private var backgroundMusic: MediaPlayer? = null
 
 private val cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -120,6 +123,23 @@ super.onCreate(savedInstanceState)
      )
  }
 
+ startBackgroundMusic()
+
+}
+
+private fun startBackgroundMusic() {
+    if (backgroundMusic != null) {
+        return
+    }
+
+    backgroundMusic = MediaPlayer.create(
+        this,
+        R.raw.background_music
+    ).apply {
+        isLooping = true
+        setVolume(0.5f, 0.5f)
+        start()
+    }
 }
 
 /**
@@ -581,15 +601,16 @@ true
 }
 
 override fun onDestroy() {
+    super.onDestroy()
 
- super.onDestroy()
+    cameraExecutor.shutdown()
 
- cameraExecutor.shutdown()
+    if (::handLandmarker.isInitialized) {
+        handLandmarker.close()
+    }
 
- if (::handLandmarker.isInitialized) {
-     handLandmarker.close()
- }
-
+    backgroundMusic?.release()
+    backgroundMusic = null
 }
 
 companion object {
