@@ -25,135 +25,155 @@ import java.util.concurrent.Executors
 
 /**
 
-* Versão Android do main.py da versão desktop.
-*
-* Pipeline:
-* 1. Captura frame da câmera.
-* 2. Converte para Bitmap.
-* 3. Corrige rotação e espelha a imagem.
-* 4. Detecta as duas mãos usando MediaPipe em modo VIDEO.
-* 5. Extrai os dedos indicador/polegar.
-* 6. Suaviza os quatro pontos com PortalTracker.
-* 7. Mantém o último portal por alguns frames quando a detecção falha.
-* 8. Calcula o gesto de fechamento usando os pontos suavizados.
-* 9. Renderiza o filtro dentro do portal.
-     */
-     class MainActivity : AppCompatActivity() {
+Versão Android do main.py da versão desktop.
 
-  private lateinit var imageView: ImageView
-  private lateinit var handLandmarker: HandLandmarker
 
-  private val cameraExecutor = Executors.newSingleThreadExecutor()
+Pipeline:
 
-  private var filtroIndex = 0
 
-  private val closingDetector = ClosingGestureDetector()
+captura frame da câmera;
 
-  /**
 
-  * Suaviza os pontos do portal e mantém a última posição válida
-  * durante pequenas falhas de detecção.
-    */
-    private val portalTracker = PortalTracker(maxMissedFrames = 8)
+corrige rotação e espelha a imagem;
 
-  /**
 
-  * Timestamp usado pelo MediaPipe no modo VIDEO.
-  *
-  * Precisa ser monotonicamente crescente.
-    */
-    private var lastTimestampMs = 0L
+detecta as duas mãos usando MediaPipe em modo VIDEO;
 
-  private val requestPermissionLauncher =
-  registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-  if (granted) {
-  startCamera()
-  } else {
-  Toast.makeText(
-  this,
-  "É necessário conceder acesso à câmera.",
-  Toast.LENGTH_LONG
-  ).show()
-  }
-  }
 
-  override fun onCreate(savedInstanceState: Bundle?) {
-  super.onCreate(savedInstanceState)
+obtém os dedos indicador e polegar;
 
-  ```
-   setContentView(R.layout.activity_main)
 
-   imageView = findViewById(R.id.preview_image)
+suaviza os quatro pontos usando PortalTracker;
 
-   setupHandLandmarker()
 
-   if (
-       ContextCompat.checkSelfPermission(
-           this,
-           Manifest.permission.CAMERA
-       ) == PackageManager.PERMISSION_GRANTED
-   ) {
-       startCamera()
-   } else {
-       requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-   }
-  ```
+mantém o último portal durante pequenas falhas de detecção;
 
-  }
 
-  /**
+calcula o gesto de fechamento usando os pontos suavizados;
 
-  * Configura o MediaPipe Hand Landmarker.
-  *
-  * A principal mudança em relação à versão anterior é:
-  *
-  * RunningMode.IMAGE
-  * ```
-       ↓
-    ```
-  * RunningMode.VIDEO
-  *
-  * Isso permite que o MediaPipe utilize o rastreamento temporal
-  * entre os frames, reduzindo custo e instabilidade.
-    */
-    private fun setupHandLandmarker() {
 
-    val baseOptions = BaseOptions.builder()
-    .setModelAssetPath("hand_landmarker.task")
-    .build()
 
-    val options = HandLandmarker.HandLandmarkerOptions.builder()
-    .setBaseOptions(baseOptions)
-    .setNumHands(2)
-    .setMinHandDetectionConfidence(0.6f)
-    .setMinTrackingConfidence(0.6f)
-    .setMinHandPresenceConfidence(0.6f)
-    .setRunningMode(RunningMode.VIDEO)
-    .build()
 
-    handLandmarker = HandLandmarker.createFromOptions(
-    this,
-    options
-    )
-    }
+renderiza o filtro dentro do portal.
+*/
+class MainActivity : AppCompatActivity() {
 
-  /**
+private lateinit var imageView: ImageView
+private lateinit var handLandmarker: HandLandmarker
 
-  * Inicializa a câmera.
-    */
-    private fun startCamera() {
+private val cameraExecutor = Executors.newSingleThreadExecutor()
 
-    val cameraProviderFuture =
-    ProcessCameraProvider.getInstance(this)
+private var filtroIndex = 0
 
-    cameraProviderFuture.addListener({
+private val closingDetector = ClosingGestureDetector()
 
-    ```
-     val cameraProvider = cameraProviderFuture.get()
+/**
 
-     @Suppress("DEPRECATION")
-     val analysis = ImageAnalysis.Builder()
-         .setTargetResolution(Size(640, 480))
+Suaviza os quatro pontos do portal e mantém a última posição
+válida durante pequenas falhas de detecção.
+*/
+private val portalTracker = PortalTracker(
+maxMissedFrames = 8
+)
+
+/**
+
+O modo VIDEO do MediaPipe exige timestamps crescentes.
+*/
+private var lastTimestampMs = 0L
+
+private val requestPermissionLauncher =
+registerForActivityResult(
+ActivityResultContracts.RequestPermission()
+) { granted ->
+
+     if (granted) {
+         startCamera()
+     } else {
+         Toast.makeText(
+             this,
+             "É necessário conceder acesso à câmera.",
+             Toast.LENGTH_LONG
+         ).show()
+     }
+ }
+
+override fun onCreate(savedInstanceState: Bundle?) {
+super.onCreate(savedInstanceState)
+
+ setContentView(R.layout.activity_main)
+
+ imageView = findViewById(R.id.preview_image)
+
+ setupHandLandmarker()
+
+ if (
+     ContextCompat.checkSelfPermission(
+         this,
+         Manifest.permission.CAMERA
+     ) == PackageManager.PERMISSION_GRANTED
+ ) {
+     startCamera()
+ } else {
+     requestPermissionLauncher.launch(
+         Manifest.permission.CAMERA
+     )
+ }
+
+}
+
+/**
+
+Configura o MediaPipe Hand Landmarker.
+
+
+O modo VIDEO permite que o MediaPipe utilize o rastreamento
+
+temporal entre frames, tornando a detecção mais estável e rápida.
+*/
+private fun setupHandLandmarker() {
+
+val baseOptions = BaseOptions.builder()
+.setModelAssetPath("hand_landmarker.task")
+.build()
+
+val options =
+HandLandmarker.HandLandmarkerOptions.builder()
+.setBaseOptions(baseOptions)
+.setNumHands(2)
+.setMinHandDetectionConfidence(0.6f)
+.setMinTrackingConfidence(0.6f)
+.setMinHandPresenceConfidence(0.6f)
+.setRunningMode(RunningMode.VIDEO)
+.build()
+
+handLandmarker =
+HandLandmarker.createFromOptions(
+this,
+options
+)
+}
+
+/**
+
+Inicializa a câmera frontal.
+*/
+private fun startCamera() {
+
+val cameraProviderFuture =
+ProcessCameraProvider.getInstance(this)
+
+cameraProviderFuture.addListener({
+
+ val cameraProvider =
+     cameraProviderFuture.get()
+
+ @Suppress("DEPRECATION")
+ val analysis =
+     ImageAnalysis.Builder()
+         .setTargetResolution(
+             Size(640, 480)
+         )
          .setOutputImageFormat(
              ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888
          )
@@ -162,438 +182,420 @@ import java.util.concurrent.Executors
          )
          .build()
 
-     analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-         analyze(imageProxy)
-     }
+ analysis.setAnalyzer(cameraExecutor) { imageProxy ->
+     analyze(imageProxy)
+ }
 
-     /**
-      * Câmera frontal para comportamento de espelho.
-      */
-     val cameraSelector =
-         CameraSelector.DEFAULT_FRONT_CAMERA
+ val cameraSelector =
+     CameraSelector.DEFAULT_FRONT_CAMERA
 
-     try {
+ try {
 
-         cameraProvider.unbindAll()
+     cameraProvider.unbindAll()
 
-         cameraProvider.bindToLifecycle(
-             this,
-             cameraSelector,
-             analysis
-         )
+     cameraProvider.bindToLifecycle(
+         this,
+         cameraSelector,
+         analysis
+     )
 
-     } catch (e: Exception) {
+ } catch (e: Exception) {
 
-         Log.e(
-             TAG,
-             "Falha ao iniciar a câmera",
-             e
-         )
-     }
-    ```
+     Log.e(
+         TAG,
+         "Falha ao iniciar a câmera",
+         e
+     )
+ }
 
-    }, ContextCompat.getMainExecutor(this))
-    }
+}, ContextCompat.getMainExecutor(this))
+}
 
-  /**
+/**
 
-  * Processa um frame da câmera.
-    */
-    private fun analyze(imageProxy: ImageProxy) {
+Processa um frame da câmera.
+*/
+private fun analyze(imageProxy: ImageProxy) {
 
-    try {
+try {
 
-    ```
-     val rawBitmap = imageProxyToBitmap(imageProxy)
+ val rawBitmap =
+     imageProxyToBitmap(imageProxy)
 
-     val rotation =
-         imageProxy.imageInfo.rotationDegrees
+ val rotation =
+     imageProxy.imageInfo.rotationDegrees
 
-     /**
-      * Corrige orientação e espelha a câmera frontal.
-      */
-     val bitmap = rotateAndMirror(
+ val bitmap =
+     rotateAndMirror(
          rawBitmap,
          rotation,
          mirror = true
      )
 
-     /**
-      * O Bitmap original não é mais necessário depois
-      * da transformação.
-      */
-     if (bitmap !== rawBitmap) {
-         rawBitmap.recycle()
+ /*
+  * Se a rotação/espelhamento criou outro Bitmap,
+  * o bitmap original não é mais necessário.
+  */
+ if (bitmap !== rawBitmap) {
+     rawBitmap.recycle()
+ }
+
+ val imageWidth = bitmap.width
+ val imageHeight = bitmap.height
+
+ val mpImage =
+     BitmapImageBuilder(bitmap).build()
+
+ /*
+  * O MediaPipe VIDEO exige timestamp crescente.
+  *
+  * nanoTime é monotônico e, portanto, adequado para
+  * construir um timestamp em milissegundos.
+  */
+ val currentTimestampMs =
+     System.nanoTime() / 1_000_000L
+
+ val timestampMs =
+     if (currentTimestampMs <= lastTimestampMs) {
+         lastTimestampMs + 1L
+     } else {
+         currentTimestampMs
      }
 
-     val width = bitmap.width
-     val height = bitmap.height
+ lastTimestampMs = timestampMs
 
-     val mpImage =
-         BitmapImageBuilder(bitmap).build()
+ /*
+  * IMPORTANTE:
+  *
+  * Como o RunningMode é VIDEO, usamos detectForVideo()
+  * em vez de detect().
+  */
+ val result =
+     handLandmarker.detectForVideo(
+         mpImage,
+         timestampMs
+     )
 
-     /**
-      * Garante timestamp crescente.
-      *
-      * O ImageProxy não fornece necessariamente um timestamp
-      * adequado para o requisito do modo VIDEO, portanto usamos
-      * o timestamp do sistema.
-      */
-     val timestampMs = System.nanoTime() / 1_000_000L
+ val landmarksList =
+     result.landmarks()
 
-     val safeTimestamp =
-         if (timestampMs <= lastTimestampMs) {
-             lastTimestampMs + 1L
-         } else {
-             timestampMs
-         }
+ val handednessList =
+     result.handednesses()
 
-     lastTimestampMs = safeTimestamp
+ var leftHand:
+     List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>? =
+     null
 
-     /**
-      * IMPORTANTE:
-      *
-      * Em RunningMode.VIDEO não usamos detect().
-      *
-      * Usamos detectForVideo() para permitir que o MediaPipe
-      * aproveite o rastreamento entre frames.
-      */
-     val result =
-         handLandmarker.detectForVideo(
-             mpImage,
-             safeTimestamp
-         )
+ var rightHand:
+     List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>? =
+     null
 
-     val landmarksList =
-         result.landmarks()
+ /*
+  * Identifica as mãos detectadas.
+  *
+  * Como a imagem já foi espelhada para funcionar como
+  * um espelho, invertimos Left/Right.
+  */
+ for (index in landmarksList.indices) {
 
-     val handednessList =
-         result.handednesses()
-
-     var leftHand:
-         List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>? =
-         null
-
-     var rightHand:
-         List<com.google.mediapipe.tasks.components.containers.NormalizedLandmark>? =
-         null
-
-     /**
-      * Identifica as duas mãos.
-      *
-      * Como a imagem já foi espelhada, invertemos Left/Right
-      * fornecido pelo MediaPipe para manter a mesma lógica
-      * utilizada anteriormente.
-      */
-     for (idx in landmarksList.indices) {
-
-         if (handednessList[idx].isEmpty()) {
-             continue
-         }
-
-         val rawLabel =
-             handednessList[idx][0].categoryName()
-
-         val label =
-             if (rawLabel == "Left") {
-                 "Right"
-             } else {
-                 "Left"
-             }
-
-         if (label == "Left") {
-             leftHand = landmarksList[idx]
-         } else {
-             rightHand = landmarksList[idx]
-         }
+     if (handednessList[index].isEmpty()) {
+         continue
      }
 
-     /**
-      * Obtém os pontos crus.
-      *
-      * Se uma das mãos não foi encontrada, rawPortal será null.
-      *
-      * O PortalTracker cuidará da persistência e poderá manter
-      * o último portal durante alguns frames.
-      */
-     val rawPortal =
-         if (leftHand != null && rightHand != null) {
+     val rawLabel =
+         handednessList[index][0].categoryName()
 
-             val p1 = PointF(
-                 leftHand[
-                     HandLandmarks.INDEX_TIP
-                 ].x() * width,
-                 leftHand[
-                     HandLandmarks.INDEX_TIP
-                 ].y() * height
-             )
-
-             val p2 = PointF(
-                 leftHand[
-                     HandLandmarks.THUMB_TIP
-                 ].x() * width,
-                 leftHand[
-                     HandLandmarks.THUMB_TIP
-                 ].y() * height
-             )
-
-             val p3 = PointF(
-                 rightHand[
-                     HandLandmarks.INDEX_TIP
-                 ].x() * width,
-                 rightHand[
-                     HandLandmarks.INDEX_TIP
-                 ].y() * height
-             )
-
-             val p4 = PointF(
-                 rightHand[
-                     HandLandmarks.THUMB_TIP
-                 ].x() * width,
-                 rightHand[
-                     HandLandmarks.THUMB_TIP
-                 ].y() * height
-             )
-
-             PortalPoints(
-                 p1 = p1,
-                 p2 = p2,
-                 p3 = p3,
-                 p4 = p4
-             )
-
+     val label =
+         if (rawLabel == "Left") {
+             "Right"
          } else {
-             null
+             "Left"
          }
 
-     /**
-      * Suaviza os pontos e mantém o portal durante pequenas
-      * falhas de detecção.
-      */
-     val portal =
-         portalTracker.update(
-             rawPortal,
-             safeTimestamp
+     if (label == "Left") {
+         leftHand = landmarksList[index]
+     } else {
+         rightHand = landmarksList[index]
+     }
+ }
+
+ /*
+  * Cria os quatro pontos crus do portal.
+  *
+  * Caso uma das mãos não seja detectada, rawPortal será null.
+  * O PortalTracker tratará essa falha.
+  */
+ val rawPortal: PortalPoints? =
+     if (leftHand != null && rightHand != null) {
+
+         val p1 =
+             PointF(
+                 leftHand[
+                     HandLandmarks.INDEX_TIP
+                 ].x() * imageWidth,
+                 leftHand[
+                     HandLandmarks.INDEX_TIP
+                 ].y() * imageHeight
+             )
+
+         val p2 =
+             PointF(
+                 leftHand[
+                     HandLandmarks.THUMB_TIP
+                 ].x() * imageWidth,
+                 leftHand[
+                     HandLandmarks.THUMB_TIP
+                 ].y() * imageHeight
+             )
+
+         val p3 =
+             PointF(
+                 rightHand[
+                     HandLandmarks.INDEX_TIP
+                 ].x() * imageWidth,
+                 rightHand[
+                     HandLandmarks.INDEX_TIP
+                 ].y() * imageHeight
+             )
+
+         val p4 =
+             PointF(
+                 rightHand[
+                     HandLandmarks.THUMB_TIP
+                 ].x() * imageWidth,
+                 rightHand[
+                     HandLandmarks.THUMB_TIP
+                 ].y() * imageHeight
+             )
+
+         PortalPoints(
+             p1 = p1,
+             p2 = p2,
+             p3 = p3,
+             p4 = p4
          )
 
-     if (portal != null) {
+     } else {
+         null
+     }
 
-         /**
-          * Os pontos abaixo já são suavizados.
-          */
-         val p1 = portal.p1
-         val p2 = portal.p2
-         val p3 = portal.p3
-         val p4 = portal.p4
+ /*
+  * Aplica:
+  *
+  * 1. One Euro Filter nos quatro pontos;
+  * 2. persistência durante falhas momentâneas.
+  */
+ val portal =
+     portalTracker.update(
+         rawPortal,
+         timestampMs
+     )
 
-         /**
-          * Calcula a largura do portal usando pontos suavizados.
-          *
-          * Isso também estabiliza o ClosingGestureDetector.
-          */
-         val widthValue =
-             portalWidth(
-                 p1,
-                 p2,
-                 p3,
-                 p4
-             )
+ if (portal != null) {
 
-         /**
-          * O gesto agora recebe uma distância muito menos
-          * ruidosa, evitando oscilações próximas ao threshold.
-          */
-         if (
-             closingDetector.update(
-                 widthValue,
-                 width
-             )
-         ) {
+     /*
+      * Estes quatro pontos já estão suavizados.
+      */
+     val p1 = portal.p1
+     val p2 = portal.p2
+     val p3 = portal.p3
+     val p4 = portal.p4
 
-             filtroIndex =
-                 (filtroIndex + 1) % FILTERS.size
-         }
-
-         /**
-          * Renderiza o filtro usando os pontos suavizados.
-          */
-         renderPortal(
-             bitmap,
+     /*
+      * Calcula a largura usando os pontos suavizados.
+      *
+      * Isso também deixa o ClosingGestureDetector
+      * muito menos sensível ao ruído.
+      */
+     val portalWidthValue =
+         portalWidth(
              p1,
              p2,
              p3,
-             p4,
-             FILTERS[filtroIndex]
+             p4
          )
-     }
 
-     /**
-      * Atualiza a UI somente na thread principal.
+     /*
+      * O gesto de fechamento agora trabalha com a
+      * distância suavizada.
       */
-     runOnUiThread {
+     if (
+         closingDetector.update(
+             portalWidthValue,
+             imageWidth
+         )
+     ) {
 
-         imageView.setImageBitmap(bitmap)
+         filtroIndex =
+             (filtroIndex + 1) % FILTERS.size
      }
-    ```
 
-    } catch (e: Exception) {
-
-    ```
-     Log.e(
-         TAG,
-         "Erro ao processar frame",
-         e
+     /*
+      * Desenha usando os pontos suavizados.
+      */
+     renderPortal(
+         bitmap,
+         p1,
+         p2,
+         p3,
+         p4,
+         FILTERS[filtroIndex]
      )
-    ```
+ }
 
-    } finally {
+ /*
+  * Atualiza o ImageView na UI thread.
+  */
+ runOnUiThread {
+     imageView.setImageBitmap(bitmap)
+ }
 
-    ```
-     imageProxy.close()
-    ```
+} catch (e: Exception) {
 
-    }
-    }
+ Log.e(
+     TAG,
+     "Erro ao processar frame",
+     e
+ )
 
-  /**
+} finally {
 
-  * Converte ImageProxy RGBA_8888 para Bitmap.
-  *
-  * Evita o .copy() adicional quando o buffer já possui exatamente
-  * o tamanho necessário.
-    */
-    private fun imageProxyToBitmap(
-    image: ImageProxy
-    ): Bitmap {
+ imageProxy.close()
 
-    val plane = image.planes[0]
+}
+}
 
-    val buffer = plane.buffer
+/**
 
-    buffer.rewind()
+Converte um ImageProxy RGBA_8888 para Bitmap.
 
-    val pixelStride =
-    plane.pixelStride
 
-    val rowStride =
-    plane.rowStride
 
-    val rowPadding =
-    rowStride -
-    pixelStride * image.width
+Evita uma cópia adicional quando não existe padding.
+*/
+private fun imageProxyToBitmap(
+image: ImageProxy
+): Bitmap {
 
-    /**
+val plane = image.planes[0]
 
-    * Normalmente, com RGBA_8888, o pixelStride é 4.
-      */
-      val bitmapWidth =
-      image.width +
-      rowPadding / pixelStride
+val buffer = plane.buffer
+buffer.rewind()
 
-    val bitmap =
-    Bitmap.createBitmap(
-    bitmapWidth,
-    image.height,
-    Bitmap.Config.ARGB_8888
-    )
+val pixelStride =
+plane.pixelStride
 
-    bitmap.copyPixelsFromBuffer(buffer)
+val rowStride =
+plane.rowStride
 
-    /**
+val rowPadding =
+rowStride -
+pixelStride * image.width
 
-    * Se não existe padding, podemos retornar diretamente.
-    *
-    * Caso exista padding, precisamos recortar a área útil.
-      */
-      return if (rowPadding == 0) {
+val bitmapWidth =
+image.width +
+rowPadding / pixelStride
 
-      bitmap
+val bitmap =
+Bitmap.createBitmap(
+bitmapWidth,
+image.height,
+Bitmap.Config.ARGB_8888
+)
 
-    } else {
+bitmap.copyPixelsFromBuffer(buffer)
 
-    ```
-     val cropped =
-         Bitmap.createBitmap(
-             bitmap,
-             0,
-             0,
-             image.width,
-             image.height
-         )
+/*
 
-     bitmap.recycle()
+Sem padding: podemos reutilizar diretamente o Bitmap.
+*/
+if (rowPadding == 0) {
+return bitmap
+}
 
-     cropped
-    ```
+/*
 
-    }
-    }
+Com padding: recorta somente a região útil.
+*/
+val cropped =
+Bitmap.createBitmap(
+bitmap,
+0,
+0,
+image.width,
+image.height
+)
 
-  /**
+bitmap.recycle()
 
-  * Rotaciona a imagem conforme a orientação da câmera
-  * e espelha horizontalmente.
-    */
-    private fun rotateAndMirror(
-    bitmap: Bitmap,
-    rotationDegrees: Int,
-    mirror: Boolean
-    ): Bitmap {
+return cropped
+}
 
-    /**
+/**
 
-    * Não precisamos criar uma matriz quando não há transformação.
-      */
-      if (rotationDegrees == 0 && !mirror) {
-      return bitmap
-      }
+Rotaciona a imagem de acordo com a orientação da câmera
 
-    val matrix = Matrix()
+e espelha horizontalmente.
+*/
+private fun rotateAndMirror(
+bitmap: Bitmap,
+rotationDegrees: Int,
+mirror: Boolean
+): Bitmap {
 
-    if (rotationDegrees != 0) {
-    matrix.postRotate(
-    rotationDegrees.toFloat()
-    )
-    }
+/*
 
-    if (mirror) {
-    matrix.postScale(
-    -1f,
-    1f
-    )
-    }
+Se não há transformação, reutiliza o Bitmap original.
+*/
+if (
+rotationDegrees == 0 &&
+!mirror
+) {
+return bitmap
+}
 
-    return Bitmap.createBitmap(
-    bitmap,
-    0,
-    0,
-    bitmap.width,
-    bitmap.height,
-    matrix,
-    true
-    )
-    }
+val matrix = Matrix()
 
-  override fun onDestroy() {
+if (rotationDegrees != 0) {
+matrix.postRotate(
+rotationDegrees.toFloat()
+)
+}
 
-  ```
-   super.onDestroy()
+if (mirror) {
+matrix.postScale(
+-1f,
+1f
+)
+}
 
-   cameraExecutor.shutdown()
+return Bitmap.createBitmap(
+bitmap,
+0,
+0,
+bitmap.width,
+bitmap.height,
+matrix,
+true
+)
+}
 
-   if (::handLandmarker.isInitialized) {
-       handLandmarker.close()
-   }
-  ```
+override fun onDestroy() {
 
-  }
+ super.onDestroy()
 
-  companion object {
+ cameraExecutor.shutdown()
 
-  ```
-   private const val TAG =
-       "PortalHands"
-  ```
+ if (::handLandmarker.isInitialized) {
+     handLandmarker.close()
+ }
 
-  }
-  }
+}
+
+companion object {
+
+ private const val TAG =
+     "PortalHands"
+
+}
+}
