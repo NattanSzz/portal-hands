@@ -14,37 +14,26 @@ private fun gray(r: Int, g: Int, b: Int): Double = 0.299 * r + 0.587 * g + 0.114
 
 private fun lerp(a: Int, b: Int, t: Double): Int = (a + (b - a) * t).toInt()
 
-/**
- * Um filtro completo: a função que transforma os pixels + uma cor de destaque
- * usada no brilho animado da borda do portal, pra cada filtro ter uma
- * identidade visual própria.
- */
 data class Filtro(
     val nome: String,
     val corGlow: Int,
     val aplicar: FiltroFunc
 )
 
-// ---------------------------------------------------------------------------
-// Filtros originais (portados de filters.py), com paleta atualizada onde fazia
-// sentido deixar mais vibrante.
-// ---------------------------------------------------------------------------
-
-/** Posterização em 4 faixas — agora em paleta neon em vez de tons apagados. */
 fun filtro1(pixels: IntArray, w: Int, h: Int) {
     for (i in pixels.indices) {
         val c = pixels[i]
         val gr = gray(Color.red(c), Color.green(c), Color.blue(c))
         pixels[i] = when {
-            gr < 60 -> argb(18, 6, 40)      // roxo bem escuro
-            gr < 130 -> argb(255, 20, 130)  // magenta elétrico
-            gr < 195 -> argb(0, 225, 255)   // ciano vibrante
-            else -> argb(255, 245, 210)     // branco quente
+            gr < 60 -> argb(18, 6, 40)   
+            gr < 130 -> argb(255, 20, 130)  
+            gr < 195 -> argb(0, 225, 255)  
+            else -> argb(255, 245, 210)     
         }
     }
 }
 
-/** Trama de pontos (halftone) preto e branco, célula de 6px. */
+
 fun filtro2(pixels: IntArray, w: Int, h: Int) {
     val cell = 6.0
     for (y in 0 until h) {
@@ -61,7 +50,6 @@ fun filtro2(pixels: IntArray, w: Int, h: Int) {
     }
 }
 
-/** Deslocamento de canais de cor + linhas de scanline. */
 fun filtro3(pixels: IntArray, w: Int, h: Int) {
     val shift = 6
     val size = pixels.size
@@ -106,7 +94,6 @@ private val jetLut: IntArray by lazy {
     }
 }
 
-/** Escala de cinza + colormap JET (estilo térmico). */
 fun filtro5(pixels: IntArray, w: Int, h: Int) {
     for (i in pixels.indices) {
         val c = pixels[i]
@@ -115,7 +102,6 @@ fun filtro5(pixels: IntArray, w: Int, h: Int) {
     }
 }
 
-/** Sépia + vinheta + ruído. */
 fun filtro6(pixels: IntArray, w: Int, h: Int) {
     val cx = w / 2.0
     val cy = h / 2.0
@@ -146,7 +132,6 @@ fun filtro6(pixels: IntArray, w: Int, h: Int) {
     }
 }
 
-/** Blur separável simples (usado pelo blur base e pelo bloom). */
 private fun boxBlur(pixels: IntArray, w: Int, h: Int, radius: Int): IntArray {
     val temp = IntArray(pixels.size)
     val out = IntArray(pixels.size)
@@ -183,7 +168,6 @@ private fun boxBlur(pixels: IntArray, w: Int, h: Int, radius: Int): IntArray {
     return out
 }
 
-/** Blur separável de canal único (usado no glow do filtro de bordas neon). */
 private fun boxBlurGray(values: FloatArray, w: Int, h: Int, radius: Int): FloatArray {
     val temp = FloatArray(values.size)
     val out = FloatArray(values.size)
@@ -211,12 +195,10 @@ private fun boxBlurGray(values: FloatArray, w: Int, h: Int, radius: Int): FloatA
     return out
 }
 
-/** Blur + mistura com branco, agora com um leve bloom (brilho suave) nas áreas claras. */
 fun filtroBlanco(pixels: IntArray, w: Int, h: Int) {
     val original = pixels.copyOf()
     val blurred = boxBlur(pixels, w, h, 12)
 
-    // isola os pixels mais claros do original pra servir de fonte do brilho
     val bright = IntArray(pixels.size)
     for (i in original.indices) {
         val c = original[i]
@@ -238,7 +220,6 @@ fun filtroBlanco(pixels: IntArray, w: Int, h: Int) {
     }
 }
 
-/** Trama de pontos em tons de rosa, célula de 5px. */
 fun filtroRosa(pixels: IntArray, w: Int, h: Int) {
     val cell = 5.0
     for (y in 0 until h) {
@@ -255,7 +236,6 @@ fun filtroRosa(pixels: IntArray, w: Int, h: Int) {
     }
 }
 
-/** Sobreposição de grade clara. */
 fun filtroGrid(pixels: IntArray, w: Int, h: Int) {
     val step = 22
     val lr = 235; val lg = 235; val lb = 235
@@ -275,11 +255,6 @@ fun filtroGrid(pixels: IntArray, w: Int, h: Int) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Filtros novos — visual mais moderno, tipo shader de jogo.
-// ---------------------------------------------------------------------------
-
-/** Paleta usada no gradiente "Aurora": indigo -> magenta -> coral -> dourado -> branco-menta. */
 private val auroraStops = listOf(
     0.00 to Triple(30, 10, 60),
     0.35 to Triple(200, 30, 150),
@@ -309,7 +284,6 @@ private val auroraLut: IntArray by lazy {
     }
 }
 
-/** Gradiente holográfico suave — visual elegante e vibrante, tipo capa de disco moderna. */
 fun filtroAurora(pixels: IntArray, w: Int, h: Int) {
     for (i in pixels.indices) {
         val c = pixels[i]
@@ -318,7 +292,6 @@ fun filtroAurora(pixels: IntArray, w: Int, h: Int) {
     }
 }
 
-/** Contornos brilhantes estilo "Tron" sobre fundo escuro — visual de shader de jogo moderno. */
 fun filtroNeonEdges(pixels: IntArray, w: Int, h: Int) {
     val size = pixels.size
     val grayVals = FloatArray(size)
@@ -352,7 +325,6 @@ fun filtroNeonEdges(pixels: IntArray, w: Int, h: Int) {
     }
 }
 
-/** Lista de filtros disponíveis, na ordem em que o gesto de fechar as mãos alterna entre eles. */
 val FILTERS: List<Filtro> = listOf(
     Filtro("Grade", argb(230, 230, 255), ::filtroGrid),
     Filtro("Posterize Neon", argb(255, 30, 150), ::filtro1),
