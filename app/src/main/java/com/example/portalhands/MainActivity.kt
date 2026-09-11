@@ -26,15 +26,6 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.util.concurrent.Executors
 
-/**
- * Versão Android do main.py da versão desktop.
- *
- * O pipeline é o mesmo: captura um frame da câmera, espelha, detecta as duas mãos,
- * calcula o polígono do "portal" entre os dedos indicador e polegar de cada mão,
- * pinta o filtro atual dentro do polígono e mostra o resultado em tela cheia.
- * Aproximar/fechar os dedos de cada mão (gesto de "fechar o portal") avança para
- * o próximo filtro, exatamente como no ClosingGestureDetector do desktop.
- */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var imageView: ImageView
@@ -44,15 +35,12 @@ class MainActivity : AppCompatActivity() {
     private var filtroIndex = 0
     private val closingDetector = ClosingGestureDetector()
 
-    // Estado usado para suavizar a posição do portal e tolerar falhas
-    // pontuais de detecção sem o efeito "piscar" ou sumir por um instante.
     private var smoothedP1: PointF? = null
     private var smoothedP2: PointF? = null
     private var smoothedP3: PointF? = null
     private var smoothedP4: PointF? = null
     private var missFrames = 0
 
-    // Trilha sonora em loop (arquivo em res/raw/sunflower.mp3).
     private var mediaPlayer: MediaPlayer? = null
 
     private val requestPermissionLauncher =
@@ -103,7 +91,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupHandLandmarker() {
-        // O modelo hand_landmarker.task precisa estar em app/src/main/assets/ (veja o README).
         val baseOptions = BaseOptions.builder()
             .setModelAssetPath("hand_landmarker.task")
             .build()
@@ -114,9 +101,6 @@ class MainActivity : AppCompatActivity() {
             .setMinHandDetectionConfidence(0.5f)
             .setMinTrackingConfidence(0.5f)
             .setMinHandPresenceConfidence(0.5f)
-            // VIDEO ativa o rastreamento entre frames (como o static_image_mode=False
-            // do MediaPipe Python usado no desktop), em vez de tratar cada frame como
-            // uma foto isolada. É o que elimina o "piscar" e o sumiço da detecção.
             .setRunningMode(RunningMode.VIDEO)
             .build()
 
@@ -137,9 +121,6 @@ class MainActivity : AppCompatActivity() {
 
             analysis.setAnalyzer(cameraExecutor) { imageProxy -> analyze(imageProxy) }
 
-            // Câmera frontal, igual à experiência de "espelho" da versão desktop
-            // (cv2.flip(frame, 1)). Troque para CameraSelector.DEFAULT_BACK_CAMERA
-            // se preferir a câmera traseira.
             val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
 
             try {
@@ -172,8 +153,6 @@ class MainActivity : AppCompatActivity() {
 
             for (idx in landmarksList.indices) {
                 val rawLabel = handednessList[idx][0].categoryName()
-                // Mesma inversão Left/Right do main.py: a imagem já está espelhada,
-                // então o rótulo bruto do MediaPipe precisa ser invertido.
                 val label = if (rawLabel == "Left") "Right" else "Left"
                 if (label == "Left") leftHand = landmarksList[idx] else rightHand = landmarksList[idx]
             }
@@ -196,8 +175,6 @@ class MainActivity : AppCompatActivity() {
                     rightHand[HandLandmarks.THUMB_TIP].y() * h
                 )
 
-                // Suaviza a posição (média móvel exponencial) para tirar o
-                // tremor natural da detecção, frame a frame.
                 smoothedP1 = smooth(smoothedP1, rawP1)
                 smoothedP2 = smooth(smoothedP2, rawP2)
                 smoothedP3 = smooth(smoothedP3, rawP3)
@@ -214,9 +191,6 @@ class MainActivity : AppCompatActivity() {
 
             if (p1 != null && p2 != null && p3 != null && p4 != null) {
                 if (missFrames <= MAX_MISS_FRAMES) {
-                    // Mesmo que este frame específico não tenha detectado as mãos,
-                    // segura a última posição conhecida por alguns frames em vez de
-                    // sumir na hora — evita o efeito de "piscar" em falhas pontuais.
                     val width = portalWidth(p1, p2, p3, p4)
                     if (closingDetector.update(width, w)) {
                         filtroIndex = (filtroIndex + 1) % FILTERS.size
@@ -224,9 +198,6 @@ class MainActivity : AppCompatActivity() {
                     val filtroAtual = FILTERS[filtroIndex]
                     renderPortal(bitmap, p1, p2, p3, p4, filtroAtual.aplicar, filtroAtual.corGlow, frameTimeMs)
                 } else {
-                    // As mãos realmente sumiram por tempo suficiente: descarta o
-                    // estado suavizado para não "puxar" de uma posição antiga
-                    // quando elas voltarem a aparecer.
                     smoothedP1 = null
                     smoothedP2 = null
                     smoothedP3 = null
@@ -241,8 +212,7 @@ class MainActivity : AppCompatActivity() {
             imageProxy.close()
         }
     }
-
-    /** Média móvel exponencial simples para suavizar um ponto entre frames. */
+    
     private fun smooth(previous: PointF?, raw: PointF): PointF {
         if (previous == null) return raw
         return PointF(
@@ -251,7 +221,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /** Converte um ImageProxy no formato RGBA_8888 (configurado no ImageAnalysis) em Bitmap. */
     private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
         val plane = image.planes[0]
         val buffer = plane.buffer
@@ -274,7 +243,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Rotaciona conforme a orientação do sensor e espelha horizontalmente (equivalente a cv2.flip(frame, 1)). */
     private fun rotateAndMirror(bitmap: Bitmap, rotationDegrees: Int, mirror: Boolean): Bitmap {
         val matrix = Matrix()
         matrix.postRotate(rotationDegrees.toFloat())
@@ -295,13 +263,8 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "PortalHands"
 
-        // Quanto menor, mais suave (e com mais "atraso"); quanto maior, mais fiel
-        // ao movimento bruto (e com mais tremor). 0.5 é um meio-termo.
         private const val SMOOTHING_ALPHA = 0.5f
 
-        // Quantos frames seguidos sem detectar as duas mãos ainda toleramos antes
-        // de esconder o portal de verdade. Em ~20-30 fps, 6 frames é só uma
-        // fração de segundo — suficiente para engolir falhas pontuais do tracker.
         private const val MAX_MISS_FRAMES = 6
     }
 }
