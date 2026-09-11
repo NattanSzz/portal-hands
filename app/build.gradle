@@ -29,12 +29,10 @@ android {
         jvmTarget = '1.8'
     }
 
-    // O modelo hand_landmarker.task precisa continuar descompactado dentro do APK
     aaptOptions {
         noCompress "task"
     }
 
-    // Evita conflitos comuns de META-INF entre as libs do MediaPipe/AndroidX
     packagingOptions {
         resources.excludes.add("META-INF/DEPENDENCIES")
         resources.excludes.add("META-INF/LICENSE")
@@ -53,6 +51,5 @@ dependencies {
     implementation "androidx.camera:camera-camera2:$camerax_version"
     implementation "androidx.camera:camera-lifecycle:$camerax_version"
 
-    // Mesma versão do mediapipe usada no requirements.txt da versão desktop
     implementation "com.google.mediapipe:tasks-vision:0.10.14"
 }
