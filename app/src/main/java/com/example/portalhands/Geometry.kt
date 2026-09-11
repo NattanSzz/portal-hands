@@ -13,14 +13,12 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
-/** Igual a portal_width() do geometry.py: distância média entre os dedos das duas mãos. */
 fun portalWidth(p1: PointF, p2: PointF, p3: PointF, p4: PointF): Float {
     val topW = hypot((p3.x - p1.x).toDouble(), (p3.y - p1.y).toDouble())
     val bottomW = hypot((p4.x - p2.x).toDouble(), (p4.y - p2.y).toDouble())
     return ((topW + bottomW) / 2.0).toFloat()
 }
 
-/** Igual a ClosingGestureDetector do geometry.py. */
 class ClosingGestureDetector(
     private val closeRatio: Float = 0.16f,
     private val openRatio: Float = 0.30f
@@ -42,17 +40,8 @@ class ClosingGestureDetector(
     }
 }
 
-/**
- * Um filtro recebe os pixels (ARGB, um Int por pixel) de uma região retangular e
- * os transforma "in place". Equivale às funções filtro_* de filters.py.
- */
 typealias FiltroFunc = (pixels: IntArray, width: Int, height: Int) -> Unit
 
-/**
- * Igual a paint_filter_in_polygon() do geometry.py: recorta o retângulo que envolve
- * o polígono, aplica o filtro só nos pixels dentro do polígono, e escreve o
- * resultado de volta no bitmap original.
- */
 fun paintFilterInPolygon(bitmap: Bitmap, polygon: List<PointF>, filtro: FiltroFunc) {
     val w = bitmap.width
     val h = bitmap.height
@@ -71,9 +60,7 @@ fun paintFilterInPolygon(bitmap: Bitmap, polygon: List<PointF>, filtro: FiltroFu
     val bw = min((maxX - minX).toInt(), w - x)
     val bh = min((maxY - minY).toInt(), h - y)
     if (bw <= 1 || bh <= 1) return
-
-    // Máscara do polígono desenhada num bitmap do tamanho do recorte
-    // (o polígono é deslocado para a origem do recorte).
+    
     val maskBitmap = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
     val path = Path()
     polygon.forEachIndexed { i, p ->
@@ -103,12 +90,6 @@ fun paintFilterInPolygon(bitmap: Bitmap, polygon: List<PointF>, filtro: FiltroFu
     maskBitmap.recycle()
 }
 
-/**
- * Desenha o portal: pinta o filtro dentro do polígono e depois desenha uma
- * borda "viva" — brilho colorido (com a cor de destaque do filtro atual),
- * uma leve pulsação, e traços em movimento contornando o polígono, como um
- * shader de energia de um jogo moderno.
- */
 fun renderPortal(
     bitmap: Bitmap,
     p1: PointF, p2: PointF, p3: PointF, p4: PointF,
@@ -126,10 +107,8 @@ fun renderPortal(
     }
     path.close()
 
-    // "Respiração" suave do brilho, pra dar a sensação de portal vivo.
-    val pulse = (sin(tempoMs / 450.0) * 0.5 + 0.5).toFloat() // varia entre 0 e 1
+    val pulse = (sin(tempoMs / 450.0) * 0.5 + 0.5).toFloat()
 
-    // Camada 1: brilho externo, largo e difuso.
     val glowOuter = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = corGlow
         style = Paint.Style.STROKE
@@ -139,7 +118,6 @@ fun renderPortal(
     }
     canvas.drawPath(path, glowOuter)
 
-    // Camada 2: brilho interno, mais concentrado e saturado.
     val glowInner = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = corGlow
         style = Paint.Style.STROKE
@@ -149,7 +127,6 @@ fun renderPortal(
     }
     canvas.drawPath(path, glowInner)
 
-    // Camada 3: traços em movimento contornando o portal (efeito de energia).
     val dash = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         style = Paint.Style.STROKE
@@ -159,7 +136,6 @@ fun renderPortal(
     }
     canvas.drawPath(path, dash)
 
-    // Camada 4: núcleo nítido por cima de tudo, pra borda ficar bem definida.
     val core = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
         style = Paint.Style.STROKE
