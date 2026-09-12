@@ -3,14 +3,19 @@ package com.example.portalhands
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.PointF
+import android.graphics.Rect
 import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.util.Size
-import android.widget.ImageView
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -26,9 +31,24 @@ import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.util.concurrent.Executors
 
-class MainActivity : AppCompatActivity() {
+/**
+ * Versão Android do main.py da versão desktop, otimizada para o máximo de FPS possível:
+ *
+ * - Desenha direto numa SurfaceView usando canvas de hardware (GPU), pela própria
+ *   thread da câmera — sem passar pela UI thread nem pela alocação de Drawable que
+ *   o antigo ImageView.setImageBitmap() fazia a cada frame.
+ * - Bitmaps intermediários são reciclados assim que deixam de ser necessários,
+ *   reduzindo picos de coleta de lixo (a maior causa provável dos engasgos).
+ * - A rotação/espelhamento da câmera usa transformação sem interpolação, já que é
+ *   sempre um ângulo reto (não precisa de suavização, só custa CPU à toa).
+ * - Resolução de análise reduzida (o custo dos filtros cresce com o nº de pixels).
+ */
+class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
-    private lateinit var imageView: ImageView
+    private lateinit var surfaceView: SurfaceView
+    @Volatile private var surfaceReady = false
+    private val drawPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
+
     private lateinit var handLandmarker: HandLandmarker
     private val cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -55,7 +75,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        imageView = findViewById(R.id.preview_image)
+        surfaceView = findViewById(R.id.preview_surface)
+        surfaceView.holder.addCallback(this)
 
         setupHandLandmarker()
         setupMusic()
@@ -67,6 +88,16 @@ class MainActivity : AppCompatActivity() {
         } else {
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        surfaceReady = true
+    }
+
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
+
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        surfaceReady = false
     }
 
     private fun setupMusic() {
@@ -114,7 +145,11 @@ class MainActivity : AppCompatActivity() {
 
             @Suppress("DEPRECATION")
             val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(640, 480))
+                // Resolução mais baixa = bem menos pixels pros filtros processarem
+                // (o custo deles cresce com o número de pixels da região do portal).
+                // Se ainda estiver lento, tente 320x240. Se sobrar desempenho e
+                // quiser mais nitidez, pode subir pra 640x480.
+                .setTargetResolution(Size(480, 360))
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
@@ -137,6 +172,7 @@ class MainActivity : AppCompatActivity() {
             val rawBitmap = imageProxyToBitmap(imageProxy)
             val rotation = imageProxy.imageInfo.rotationDegrees
             val bitmap = rotateAndMirror(rawBitmap, rotation, mirror = true)
+            rawBitmap.recycle()
 
             val w = bitmap.width
             val h = bitmap.height
@@ -153,6 +189,8 @@ class MainActivity : AppCompatActivity() {
 
             for (idx in landmarksList.indices) {
                 val rawLabel = handednessList[idx][0].categoryName()
+                // Mesma inversão Left/Right do main.py: a imagem já está espelhada,
+                // então o rótulo bruto do MediaPipe precisa ser invertido.
                 val label = if (rawLabel == "Left") "Right" else "Left"
                 if (label == "Left") leftHand = landmarksList[idx] else rightHand = landmarksList[idx]
             }
@@ -205,14 +243,60 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
-            runOnUiThread { imageView.setImageBitmap(bitmap) }
+            drawToSurface(bitmap)
+            bitmap.recycle()
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao processar frame", e)
         } finally {
             imageProxy.close()
         }
     }
-    
+
+    /**
+     * Desenha direto na SurfaceView a partir da própria thread da câmera — sem passar
+     * pela UI thread. Usa canvas de hardware (GPU) quando disponível, que é bem mais
+     * rápido pra essa operação de escalar+desenhar um bitmap grande a cada frame.
+     */
+    private fun drawToSurface(bitmap: Bitmap) {
+        if (!surfaceReady) return
+        val holder = surfaceView.holder
+
+        val canvas: Canvas = (try {
+            holder.lockHardwareCanvas()
+        } catch (e: Exception) {
+            null
+        }) ?: (try {
+            holder.lockCanvas()
+        } catch (e: Exception) {
+            null
+        }) ?: return
+
+        try {
+            val dst = centerCropRect(bitmap.width, bitmap.height, canvas.width, canvas.height)
+            canvas.drawColor(Color.BLACK)
+            canvas.drawBitmap(bitmap, null, dst, drawPaint)
+        } finally {
+            holder.unlockCanvasAndPost(canvas)
+        }
+    }
+
+    /** Calcula o retângulo de destino equivalente ao scaleType="centerCrop" do ImageView. */
+    private fun centerCropRect(srcW: Int, srcH: Int, dstW: Int, dstH: Int): Rect {
+        if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return Rect(0, 0, dstW, dstH)
+        val srcRatio = srcW.toFloat() / srcH.toFloat()
+        val dstRatio = dstW.toFloat() / dstH.toFloat()
+        return if (srcRatio > dstRatio) {
+            val scaledW = (dstH * srcRatio).toInt()
+            val left = (dstW - scaledW) / 2
+            Rect(left, 0, left + scaledW, dstH)
+        } else {
+            val scaledH = (dstW / srcRatio).toInt()
+            val top = (dstH - scaledH) / 2
+            Rect(0, top, dstW, top + scaledH)
+        }
+    }
+
+    /** Média móvel exponencial simples para suavizar um ponto entre frames. */
     private fun smooth(previous: PointF?, raw: PointF): PointF {
         if (previous == null) return raw
         return PointF(
@@ -221,6 +305,7 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    /** Converte um ImageProxy no formato RGBA_8888 em Bitmap, sem cópias extras desnecessárias. */
     private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
         val plane = image.planes[0]
         val buffer = plane.buffer
@@ -229,27 +314,33 @@ class MainActivity : AppCompatActivity() {
         val rowStride = plane.rowStride
         val rowPadding = rowStride - pixelStride * image.width
 
-        val bitmap = Bitmap.createBitmap(
+        // Bitmap.createBitmap(w, h, config) já é mutável por padrão — não precisa
+        // de .copy() depois, isso só duplicava o trabalho em todo frame.
+        val paddedBitmap = Bitmap.createBitmap(
             image.width + rowPadding / pixelStride,
             image.height,
             Bitmap.Config.ARGB_8888
         )
-        bitmap.copyPixelsFromBuffer(buffer)
+        paddedBitmap.copyPixelsFromBuffer(buffer)
 
-        return if (rowPadding == 0) {
-            bitmap.copy(Bitmap.Config.ARGB_8888, true)
-        } else {
-            Bitmap.createBitmap(bitmap, 0, 0, image.width, image.height).copy(Bitmap.Config.ARGB_8888, true)
-        }
+        if (rowPadding == 0) return paddedBitmap
+
+        val cropped = Bitmap.createBitmap(paddedBitmap, 0, 0, image.width, image.height)
+        paddedBitmap.recycle()
+        return cropped
     }
 
+    /** Rotaciona conforme a orientação do sensor e espelha horizontalmente. */
     private fun rotateAndMirror(bitmap: Bitmap, rotationDegrees: Int, mirror: Boolean): Bitmap {
         val matrix = Matrix()
         matrix.postRotate(rotationDegrees.toFloat())
         if (mirror) {
             matrix.postScale(-1f, 1f)
         }
-        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+        // filter=false: a rotação é sempre em múltiplos de 90° e o espelhamento é um
+        // flip simples — ambas são transformações "alinhadas ao pixel", então a
+        // interpolação bilinear (filter=true) não muda o resultado, só custa mais CPU.
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, false)
     }
 
     override fun onDestroy() {
@@ -263,8 +354,12 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "PortalHands"
 
+        // Quanto menor, mais suave (e com mais "atraso"); quanto maior, mais fiel
+        // ao movimento bruto (e com mais tremor). 0.5 é um meio-termo.
         private const val SMOOTHING_ALPHA = 0.5f
 
+        // Quantos frames seguidos sem detectar as duas mãos ainda toleramos antes
+        // de esconder o portal de verdade.
         private const val MAX_MISS_FRAMES = 6
     }
 }

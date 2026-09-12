@@ -13,12 +13,14 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
+/** Distância média entre os dedos das duas mãos — define a "largura" do portal. */
 fun portalWidth(p1: PointF, p2: PointF, p3: PointF, p4: PointF): Float {
     val topW = hypot((p3.x - p1.x).toDouble(), (p3.y - p1.y).toDouble())
     val bottomW = hypot((p4.x - p2.x).toDouble(), (p4.y - p2.y).toDouble())
     return ((topW + bottomW) / 2.0).toFloat()
 }
 
+/** Detecta o gesto de fechar/abrir os dedos pra alternar de filtro. */
 class ClosingGestureDetector(
     private val closeRatio: Float = 0.16f,
     private val openRatio: Float = 0.30f
@@ -40,16 +42,41 @@ class ClosingGestureDetector(
     }
 }
 
+/**
+ * Um filtro recebe os pixels (ARGB, um Int por pixel) de uma região retangular e
+ * os transforma "in place".
+ */
 typealias FiltroFunc = (pixels: IntArray, width: Int, height: Int) -> Unit
 
+/**
+ * Buffers reaproveitados entre frames (só a thread única da câmera acessa isso,
+ * então não há necessidade de sincronização). Evita alocar arrays novos a cada
+ * frame — uma das maiores fontes de lixo de memória do app.
+ */
+private object PixelBuffers {
+    var original = IntArray(0)
+    var filtered = IntArray(0)
+    var crossings = FloatArray(8)
+
+    fun ensureCapacity(size: Int) {
+        if (original.size < size) original = IntArray(size)
+        if (filtered.size < size) filtered = IntArray(size)
+    }
+}
+
+/**
+ * Pinta o filtro dentro do polígono usando PREENCHIMENTO POR VARREDURA (scanline):
+ * em vez de testar cada pixel individualmente contra o polígono (caro, com uma
+ * divisão de ponto flutuante por pixel), calcula uma vez por LINHA onde a borda
+ * do polígono cruza aquela linha, e copia o trecho "de dentro" de uma vez com
+ * System.arraycopy — muito mais rápido que testar pixel a pixel.
+ */
 fun paintFilterInPolygon(bitmap: Bitmap, polygon: List<PointF>, filtro: FiltroFunc) {
     val w = bitmap.width
     val h = bitmap.height
 
-    var minX = Float.MAX_VALUE
-    var minY = Float.MAX_VALUE
-    var maxX = -Float.MAX_VALUE
-    var maxY = -Float.MAX_VALUE
+    var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
+    var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
     for (p in polygon) {
         minX = min(minX, p.x); minY = min(minY, p.y)
         maxX = max(maxX, p.x); maxY = max(maxY, p.y)
@@ -60,36 +87,73 @@ fun paintFilterInPolygon(bitmap: Bitmap, polygon: List<PointF>, filtro: FiltroFu
     val bw = min((maxX - minX).toInt(), w - x)
     val bh = min((maxY - minY).toInt(), h - y)
     if (bw <= 1 || bh <= 1) return
-    
-    val maskBitmap = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
-    val path = Path()
-    polygon.forEachIndexed { i, p ->
-        val px = p.x - x
-        val py = p.y - y
-        if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
-    }
-    path.close()
-    Canvas(maskBitmap).drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE })
 
-    val maskPixels = IntArray(bw * bh)
-    maskBitmap.getPixels(maskPixels, 0, bw, 0, 0, bw, bh)
+    val needed = bw * bh
+    PixelBuffers.ensureCapacity(needed)
+    val original = PixelBuffers.original
+    val filtered = PixelBuffers.filtered
 
-    val roiPixels = IntArray(bw * bh)
-    bitmap.getPixels(roiPixels, 0, bw, x, y, bw, bh)
+    bitmap.getPixels(original, 0, bw, x, y, bw, bh)
+    System.arraycopy(original, 0, filtered, 0, needed)
+    filtro(filtered, bw, bh)
 
-    val filteredPixels = roiPixels.copyOf()
-    filtro(filteredPixels, bw, bh)
+    val n = polygon.size
+    val vx = FloatArray(n) { polygon[it].x }
+    val vy = FloatArray(n) { polygon[it].y }
 
-    for (i in roiPixels.indices) {
-        if (Color.alpha(maskPixels[i]) > 0) {
-            roiPixels[i] = filteredPixels[i]
+    for (py in 0 until bh) {
+        val worldY = (y + py).toFloat()
+        val rowOffset = py * bw
+
+        // Onde a borda do polígono cruza esta linha horizontal.
+        var count = 0
+        var j = n - 1
+        for (i in 0 until n) {
+            val yi = vy[i]; val yj = vy[j]
+            if ((yi > worldY) != (yj > worldY)) {
+                val xCross = (vx[j] - vx[i]) * (worldY - yi) / (yj - yi) + vx[i]
+                if (count >= PixelBuffers.crossings.size) {
+                    PixelBuffers.crossings = PixelBuffers.crossings.copyOf(count * 2)
+                }
+                PixelBuffers.crossings[count] = xCross
+                count++
+            }
+            j = i
+        }
+        if (count < 2) continue
+
+        val crossings = PixelBuffers.crossings
+        // Poucos elementos (tipicamente 2) — insertion sort é mais que suficiente.
+        for (a in 1 until count) {
+            val v = crossings[a]
+            var b = a - 1
+            while (b >= 0 && crossings[b] > v) {
+                crossings[b + 1] = crossings[b]
+                b--
+            }
+            crossings[b + 1] = v
+        }
+
+        var k = 0
+        while (k + 1 < count) {
+            val startPx = (crossings[k] - x).toInt().coerceIn(0, bw)
+            val endPx = (crossings[k + 1] - x).toInt().coerceIn(0, bw)
+            if (endPx > startPx) {
+                System.arraycopy(filtered, rowOffset + startPx, original, rowOffset + startPx, endPx - startPx)
+            }
+            k += 2
         }
     }
 
-    bitmap.setPixels(roiPixels, 0, bw, x, y, bw, bh)
-    maskBitmap.recycle()
+    bitmap.setPixels(original, 0, bw, x, y, bw, bh)
 }
 
+/**
+ * Desenha o portal: pinta o filtro dentro do polígono e depois desenha uma
+ * borda "viva" — brilho colorido (cor de destaque do filtro atual), uma leve
+ * pulsação, e traços em movimento contornando o polígono. Tudo aqui é desenho
+ * vetorial do Canvas (rápido); o custo pesado fica só na parte de pixels acima.
+ */
 fun renderPortal(
     bitmap: Bitmap,
     p1: PointF, p2: PointF, p3: PointF, p4: PointF,
