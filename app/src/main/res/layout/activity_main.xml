@@ -4,11 +4,9 @@
     android:layout_height="match_parent"
     android:background="#000000">
 
-    <ImageView
-        android:id="@+id/preview_image"
+    <SurfaceView
+        android:id="@+id/preview_surface"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:scaleType="centerCrop"
-        android:contentDescription="@null" />
+        android:layout_height="match_parent" />
 
 </FrameLayout>
